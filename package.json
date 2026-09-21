@@ -1,0 +1,30 @@
+{
+  "name": "nvda-forecast-agent",
+  "version": "1.0.0",
+  "description": "Agent #2 of AI Michel — a daily AI agent that forecasts NVDA closing price from semiconductor indices, volatility, the dollar, and bond yields, with adaptive self-learning weights. Deploys to AWS (Lambda + EventBridge Scheduler + DynamoDB + S3 static dashboard).",
+  "main": "nvda_forecast_agent.ts",
+  "type": "module",
+  "scripts": {
+    "start": "npx tsx nvda_forecast_agent.ts",
+    "dashboard": "npx tsx dashboard/serve.ts",
+    "typecheck": "npx tsc --noEmit",
+    "test": "npm run typecheck && npx tsx --test test_nvda_forecast.ts test_adaptive.ts",
+    "test:long": "npm run typecheck && RUN_LONG_TESTS=1 npx tsx --test test_nvda_forecast.ts test_adaptive.ts",
+    "build": "node esbuild.config.mjs",
+    "deploy": "npm run build && sam deploy --stack-name nvdaforecast-stack --region us-east-1 --capabilities CAPABILITY_NAMED_IAM --no-confirm-changeset --resolve-s3 --profile nvda",
+    "deploy:dashboard": "node scripts/deploy-dashboard.mjs"
+  },
+  "keywords": ["ai-michel", "nvda", "forecast", "adaptive-weighting", "aws-lambda"],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "@aws-sdk/client-dynamodb": "^3.679.0",
+    "@aws-sdk/lib-dynamodb": "^3.679.0"
+  },
+  "devDependencies": {
+    "@aws-sdk/client-ssm": "^3.679.0",
+    "@types/aws-lambda": "^8.10.145",
+    "@types/node": "^25.5.0",
+    "esbuild": "^0.24.0"
+  }
+}

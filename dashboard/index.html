@@ -1,0 +1,211 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>NVDA Forecast — Agent #2 (local)</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+<style>
+  :root { --bg:#0b0f17; --card:#141a26; --line:#222b3a; --txt:#e6edf3; --mut:#8b97a8; --grn:#3fb950; --red:#f85149; --acc:#58a6ff; --gold:#d4a72c; }
+  * { box-sizing:border-box; }
+  body { margin:0; font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; background:var(--bg); color:var(--txt); }
+  .wrap { max-width:1100px; margin:0 auto; padding:28px 20px 70px; }
+  h1 { font-size:20px; margin:0 0 2px; }
+  .sub { color:var(--mut); font-size:13px; margin-bottom:22px; }
+  .badge { display:inline-block; font-size:11px; padding:2px 8px; border:1px solid var(--line); border-radius:999px; color:var(--mut); margin-left:8px; vertical-align:middle; }
+  .cards { display:grid; grid-template-columns:repeat(4,1fr); gap:14px; margin-bottom:22px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:16px 18px; }
+  .card .lbl { color:var(--mut); font-size:12px; text-transform:uppercase; letter-spacing:.04em; }
+  .card .val { font-size:24px; font-weight:600; margin-top:6px; }
+  .card .val.pos { color:var(--grn); } .card .val.neg { color:var(--red); }
+  .panel { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:18px; margin-bottom:22px; }
+  .panel h2 { font-size:13px; margin:0 0 14px; color:var(--mut); text-transform:uppercase; letter-spacing:.04em; }
+  .grid2 { display:grid; grid-template-columns:1fr 1fr; gap:22px; }
+  @media(max-width:820px){ .grid2{grid-template-columns:1fr;} .cards{grid-template-columns:1fr 1fr;} }
+  table { width:100%; border-collapse:collapse; font-size:13px; }
+  th,td { text-align:left; padding:7px 10px; border-bottom:1px solid var(--line); }
+  th { color:var(--mut); font-weight:500; }
+  td.num,th.num { text-align:right; font-variant-numeric:tabular-nums; }
+  .pos { color:var(--grn); } .neg { color:var(--red); } .zero { color:var(--mut); }
+  .art { color:#dfe8f1; font-size:15px; line-height:1.6; }
+  .art .q { color:var(--gold); font-size:22px; }
+  .empty { color:var(--mut); padding:20px; text-align:center; }
+  .formula { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:12.5px; color:#c9d4e0; background:#0d1320; border:1px solid var(--line); border-radius:8px; padding:12px 14px; white-space:pre-wrap; }
+  .bar { height:6px; background:#0d1320; border-radius:4px; overflow:hidden; margin-top:5px; }
+  .bar > i { display:block; height:100%; background:var(--acc); }
+  small.note { color:var(--mut); }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>NVDA Forecast — Agent #2 <span class="badge">live · AWS</span></h1>
+  <div class="sub">AI Michel · AI SYNT · Lambda + EventBridge (10 AM Toronto, DST-aware) + DynamoDB · <span id="meta"></span></div>
+
+  <div class="panel" style="background:linear-gradient(180deg,#15202e,#141a26)">
+    <h2>Agent performance — shared metrics across the AI Michel series</h2>
+    <div class="cards" id="metrics" style="margin-bottom:0;grid-template-columns:repeat(3,1fr)"></div>
+    <p style="margin:12px 0 0;color:var(--mut);font-size:12px">
+      Standardized dataset the top-level investment agent (10:05 AM Toronto) consumes from every lower agent. Same definitions across all four agents.
+    </p>
+  </div>
+
+  <div class="cards" id="cards"></div>
+
+  <div class="panel">
+    <h2>News sentiment summary (Action 1 · Alpha Vantage → Groq Llama 3.3 70B)</h2>
+    <div class="art" id="article"></div>
+    <p style="margin:12px 0 0;color:var(--mut);font-size:12.5px">
+      ⓘ <b>News themes only</b> — no directional prediction. The numeric forecast above is the single source of directional truth (signals + adaptive weighting). The LLM is explicitly instructed not to predict tomorrow's price.
+    </p>
+  </div>
+
+  <div class="grid2">
+    <div class="panel">
+      <h2>Signal breakdown — how the forecast is built</h2>
+      <table id="sig"><thead><tr>
+        <th>Signal</th><th class="num">Raw %</th><th class="num">Contribution</th><th class="num">Weight</th>
+      </tr></thead><tbody></tbody></table>
+      <div class="formula" id="formula" style="margin-top:14px"></div>
+    </div>
+
+    <div class="panel">
+      <h2>Adaptive self-learning state</h2>
+      <div id="adaptive"></div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <h2>Actual vs Predicted</h2>
+    <canvas id="chart" height="95"></canvas>
+  </div>
+
+  <div class="grid2">
+    <div class="panel">
+      <h2>Prediction history</h2>
+      <table id="tbl"><thead><tr>
+        <th>Date</th><th class="num">Actual</th><th class="num">Predicted</th><th class="num">Deviation</th>
+      </tr></thead><tbody></tbody></table>
+    </div>
+    <div class="panel">
+      <h2>Learning audit (10/5/0 bonuses per day)</h2>
+      <table id="acc"><thead><tr>
+        <th>Date</th><th class="num">Actual Δ%</th><th class="num">D1</th><th class="num">D2</th><th class="num">D3</th><th class="num">R1</th><th class="num">R2</th><th class="num">R3</th>
+      </tr></thead><tbody></tbody></table>
+    </div>
+  </div>
+</div>
+
+<!-- Injected by `npm run deploy:dashboard`. Locally the file is absent
+     and the dashboard falls back to /api/data served by serve.ts. -->
+<script src="config.js" onerror="/* no-op: local fallback */"></script>
+<script>
+const API_URL = (typeof window.NVDA_API_URL === "string" && window.NVDA_API_URL) || "/api/data";
+const n = v => (v === "" || v == null) ? null : Number(v);
+const pct = v => v==null ? "—" : (v>=0?"+":"")+Number(v).toFixed(2)+"%";
+const cls = v => v==null ? "" : v>0 ? "pos" : v<0 ? "neg" : "zero";
+
+fetch(API_URL).then(r=>r.json()).then(d => {
+  const rows=d.rows||[], last=d.last, analysis=d.analysis||[], adaptive=d.adaptive||{history:[]}, accuracy=d.accuracy||[];
+  const latest = rows[rows.length-1] || {};
+  const histDays = adaptive.history ? adaptive.history.length : 0;
+
+  document.getElementById("meta").textContent =
+    `last forecast ${last?last.date:"—"} · ${rows.length} day(s) history · ${histDays}/10 adaptive window`;
+
+  // Standardized metrics line (per Alex's directive for the AI Michel series)
+  const m = d.metrics || { avg_prediction_error:0, prediction_accuracy_pct:0, days_with_predictions:0, scored_days:0 };
+  document.getElementById("metrics").innerHTML = `
+    <div class="card"><div class="lbl">Average prediction error</div>
+      <div class="val">${m.scored_days>0 ? "$"+m.avg_prediction_error.toFixed(2) : "—"}</div>
+      <div class="lbl" style="margin-top:4px;text-transform:none;font-size:11px">per day · mean |actual − predicted|</div></div>
+    <div class="card"><div class="lbl">Prediction accuracy</div>
+      <div class="val ${m.prediction_accuracy_pct>=50?'pos':m.scored_days>1?'neg':''}">${m.scored_days>1 ? m.prediction_accuracy_pct.toFixed(0)+"%" : "—"}</div>
+      <div class="lbl" style="margin-top:4px;text-transform:none;font-size:11px">directional hit-rate</div></div>
+    <div class="card"><div class="lbl">Days with predictions</div>
+      <div class="val">${m.days_with_predictions}</div>
+      <div class="lbl" style="margin-top:4px;text-transform:none;font-size:11px">${m.scored_days} scored against actual</div></div>`;
+
+  // Cards
+  const actual=n(latest.actual_nvda_price), pred=last?Number(last.forecast):null, dev=n(latest.deviation);
+  // recompute forecast % from $forecast and actual price
+  const fcPct = (last && actual) ? (last.forecast/actual - 1)*100 : null;
+  document.getElementById("cards").innerHTML = `
+    <div class="card"><div class="lbl">Latest NVDA close</div><div class="val">${actual!=null?"$"+actual.toFixed(2):"—"}</div></div>
+    <div class="card"><div class="lbl">Predicted tomorrow</div><div class="val">${pred!=null?"$"+pred.toFixed(2):"—"}</div></div>
+    <div class="card"><div class="lbl">Forecast coefficient</div><div class="val ${cls(fcPct)}">${fcPct!=null?pct(fcPct):"—"}</div></div>
+    <div class="card"><div class="lbl">Last deviation</div><div class="val ${cls(dev)}">${dev!=null?(dev>=0?"+":"")+dev.toFixed(2):"—"}</div></div>`;
+
+  // Article
+  const art = analysis.length ? analysis[analysis.length-1].article : (last&&last.article);
+  document.getElementById("article").innerHTML = art
+    ? `<span class="q">“</span>${art}<span class="q">”</span>`
+    : `<span class="empty">No article yet.</span>`;
+
+  // Cumulative bonuses → weights
+  const cum = {d1:0,d2:0,d3:0,r1:0,r2:0,r3:0};
+  (adaptive.history||[]).forEach(e => { for(const k in cum) cum[k]+= (e.bonuses&&e.bonuses[k])||0; });
+
+  // Signal breakdown
+  if (last) {
+    const defs = [
+      ["D1 · SOX (Phila Semi)","c1",false],["D2 · SMH (Semi ETF)","c2",false],["D3 · NDX (Nasdaq 100)","c3",false],
+      ["R1 · VIX (Volatility)","i1",true],["R2 · DXY (Dollar)","i2",true],["R3 · TNX (10Y Yield)","i3",true]];
+    const wkey = {c1:"d1",c2:"d2",c3:"d3",i1:"r1",i2:"r2",i3:"r3"};
+    document.querySelector("#sig tbody").innerHTML = defs.map(([lbl,k,rev])=>{
+      const raw=last[k], contrib = rev ? -raw : raw, w = 100 + cum[wkey[k]];
+      return `<tr><td>${lbl}${rev?' <small class="note">(reversal, sign-flipped)</small>':''}</td>
+        <td class="num ${cls(raw)}">${pct(raw)}</td>
+        <td class="num ${cls(contrib)}">${pct(contrib)}</td>
+        <td class="num">${w}</td></tr>`;
+    }).join("");
+    const wsum = Object.values(wkey).reduce((s,k)=>s+100+cum[k],0);
+    document.getElementById("formula").textContent =
+`forecast% = Σ(weightᵢ · predᵢ) / Σ(weightᵢ)   →   ${fcPct!=null?fcPct.toFixed(2):"?"}%
+$forecast = NVDA_close × (1 + forecast%/100)
+          = $${actual?actual.toFixed(2):"?"} × (1 + ${fcPct!=null?fcPct.toFixed(2):"?"}/100)
+          = $${pred!=null?pred.toFixed(2):"?"}
+Σ weights = ${wsum}   (each = 100 + cumulative_bonus, rolling 10-day)`;
+  }
+
+  // Adaptive panel
+  const sigs=[["D1",cum.d1],["D2",cum.d2],["D3",cum.d3],["R1",cum.r1],["R2",cum.r2],["R3",cum.r3]];
+  const maxC = Math.max(10, ...sigs.map(s=>s[1]));
+  document.getElementById("adaptive").innerHTML =
+    `<p style="margin:0 0 12px;color:var(--mut)">Rolling 10-day window: <b style="color:var(--txt)">${histDays}/10</b> days scored.
+     Each day the closest signal in a group earns +10, next +5, worst 0. Weight = 100 + cumulative bonus.</p>` +
+    sigs.map(([k,v])=>`<div style="margin-bottom:10px"><div style="display:flex;justify-content:space-between">
+      <span>${k}</span><span class="num">bonus ${v} · weight ${100+v}</span></div>
+      <div class="bar"><i style="width:${Math.round(100*v/maxC)}%"></i></div></div>`).join("") +
+    (histDays===0 ? `<p class="empty" style="padding:8px 0 0">Cold start — equal weights (100 each) until the first day is scored tomorrow.</p>` : "");
+
+  // History table
+  const tb=document.querySelector("#tbl tbody");
+  tb.innerHTML = rows.length ? rows.slice().reverse().map(r=>{
+    const dv=n(r.deviation);
+    return `<tr><td>${r.date}</td><td class="num">${n(r.actual_nvda_price)?.toFixed(2)??"—"}</td>
+      <td class="num">${n(r.forecast)?.toFixed(2)??"—"}</td>
+      <td class="num ${cls(dv)}">${dv!=null?(dv>=0?"+":"")+dv.toFixed(2):"—"}</td></tr>`;
+  }).join("") : `<tr><td colspan="4" class="empty">No rows yet.</td></tr>`;
+
+  // Accuracy / learning audit
+  const ab=document.querySelector("#acc tbody");
+  ab.innerHTML = accuracy.length ? accuracy.slice().reverse().map(a=>
+    `<tr><td>${a.date}</td><td class="num">${Number(a.actual_change_pct).toFixed(2)}</td>
+     <td class="num">${a.bonus_direct_1}</td><td class="num">${a.bonus_direct_2}</td><td class="num">${a.bonus_direct_3}</td>
+     <td class="num">${a.bonus_reversal_1_converted}</td><td class="num">${a.bonus_reversal_2_converted}</td><td class="num">${a.bonus_reversal_3_converted}</td></tr>`
+  ).join("") : `<tr><td colspan="8" class="empty">No scored days yet — fills in after the first next-day comparison.</td></tr>`;
+
+  // Chart
+  new Chart(document.getElementById("chart"), {
+    type:"line",
+    data:{ labels: rows.map(r=>r.date), datasets:[
+      { label:"Actual", data: rows.map(r=>n(r.actual_nvda_price)), borderColor:"#58a6ff", backgroundColor:"transparent", tension:.25, spanGaps:true },
+      { label:"Predicted", data: rows.map(r=>n(r.forecast)), borderColor:"#3fb950", borderDash:[5,4], backgroundColor:"transparent", tension:.25, spanGaps:true },
+    ]},
+    options:{ plugins:{ legend:{ labels:{ color:"#8b97a8" } } },
+      scales:{ x:{ ticks:{color:"#8b97a8"}, grid:{color:"#222b3a"} }, y:{ ticks:{color:"#8b97a8"}, grid:{color:"#222b3a"} } } }
+  });
+}).catch(e => { document.getElementById("cards").innerHTML = `<div class="card"><div class="lbl">Error</div><div class="val">${e}</div></div>`; });
+</script>
+</body>
+</html>

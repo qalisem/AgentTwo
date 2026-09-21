@@ -1,0 +1,196 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::Serverless-2016-10-31
+Description: NVDA Forecast Agent #2 — Lambda + EventBridge Scheduler + DynamoDB + S3 static site
+
+Globals:
+  Function:
+    Runtime: nodejs22.x
+    Architectures:
+      - x86_64
+    Environment:
+      Variables:
+        STATE_TABLE_NAME: !Ref StateTable
+
+Resources:
+
+  # ─── DynamoDB: state store ─────────────────────────────────────────────────
+  # One item per artifact (CSV strings, JSON blobs) — same {key → string-value}
+  # shape the FileStore and the original Upstash key/value contract used.
+  # On-demand billing keeps cost ~$0/mo for the daily-write workload.
+  StateTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: nvda-forecast-state
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: key
+          AttributeType: S
+      KeySchema:
+        - AttributeName: key
+          KeyType: HASH
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
+
+  # ─── Lambda: Forecast Cron ─────────────────────────────────────────────────
+  # Secrets loaded from SSM Parameter Store at runtime. IAM grants ssm:Get*
+  # for /nvda-forecast/*, kms:Decrypt for the default SSM CMK, and full CRUD
+  # on the state table.
+  ForecastCronFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: nvdaforecast-forecast-cron
+      CodeUri: dist/
+      Handler: forecast-handler.handler
+      Timeout: 270
+      MemorySize: 512
+      Policies:
+        - Version: "2012-10-17"
+          Statement:
+            - Effect: Allow
+              Action:
+                - ssm:GetParameters
+                - ssm:GetParameter
+              Resource: !Sub "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/nvda-forecast/*"
+            - Effect: Allow
+              Action: kms:Decrypt
+              Resource: !Sub "arn:aws:kms:${AWS::Region}:${AWS::AccountId}:key/alias/aws/ssm"
+            - Effect: Allow
+              Action:
+                - dynamodb:GetItem
+                - dynamodb:PutItem
+                - dynamodb:UpdateItem
+              Resource: !GetAtt StateTable.Arn
+
+  ForecastCronLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: /aws/lambda/nvdaforecast-forecast-cron
+      RetentionInDays: 30
+
+  # ─── EventBridge Scheduler ─────────────────────────────────────────────────
+  # ScheduleExpressionTimezone keeps 10 AM Toronto stable across DST, so the
+  # cron literal stays a clean `0 10 * * ? *`. Mirrors Jan's pattern exactly.
+  ForecastSchedulerRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: scheduler.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: invoke-forecast-lambda
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: lambda:InvokeFunction
+                Resource: !GetAtt ForecastCronFunction.Arn
+
+  ForecastSchedule:
+    Type: AWS::Scheduler::Schedule
+    Properties:
+      Name: nvdaforecast-daily-cron
+      Description: Daily NVDA forecast at 10 AM Toronto (DST-aware)
+      ScheduleExpression: "cron(0 10 * * ? *)"
+      ScheduleExpressionTimezone: "America/Toronto"
+      State: ENABLED
+      FlexibleTimeWindow:
+        Mode: "OFF"
+      Target:
+        Arn: !GetAtt ForecastCronFunction.Arn
+        RoleArn: !GetAtt ForecastSchedulerRole.Arn
+
+  # ─── Lambda: History API ───────────────────────────────────────────────────
+  HistoryApiFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: nvdaforecast-history-api
+      CodeUri: dist/
+      Handler: history-handler.handler
+      Timeout: 30
+      MemorySize: 256
+      Policies:
+        - Version: "2012-10-17"
+          Statement:
+            - Effect: Allow
+              Action: dynamodb:GetItem
+              Resource: !GetAtt StateTable.Arn
+      Events:
+        GetHistory:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref HistoryApi
+            Method: GET
+            Path: /api/history
+
+  HistoryApiLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: /aws/lambda/nvdaforecast-history-api
+      RetentionInDays: 30
+
+  # ─── API Gateway HTTP API v2 ───────────────────────────────────────────────
+  HistoryApi:
+    Type: AWS::Serverless::HttpApi
+    Properties:
+      StageName: "$default"
+      CorsConfiguration:
+        AllowOrigins: ["*"]
+        AllowMethods: ["GET", "OPTIONS"]
+        AllowHeaders: ["Content-Type"]
+
+  # ─── S3 static site (mirrors Jan exactly — website hosting, no CloudFront) ─
+  # Per Jan's PLANNING note: CloudFront's CachePolicy resolution issue led
+  # him to drop it. Pattern consistency wins — Agent #2 mirrors verbatim.
+  DashboardBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub "nvdaforecast-dashboard-${AWS::AccountId}"
+      VersioningConfiguration:
+        Status: Enabled
+      WebsiteConfiguration:
+        IndexDocument: index.html
+        ErrorDocument: index.html
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: false
+        BlockPublicPolicy: false
+        IgnorePublicAcls: false
+        RestrictPublicBuckets: false
+      OwnershipControls:
+        Rules:
+          - ObjectOwnership: BucketOwnerPreferred
+
+  DashboardBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref DashboardBucket
+      PolicyDocument:
+        Statement:
+          - Effect: Allow
+            Principal: "*"
+            Action: s3:GetObject
+            Resource: !Sub "${DashboardBucket.Arn}/*"
+
+Outputs:
+  ForecastCronFunctionArn:
+    Description: ARN of the forecast-cron Lambda function
+    Value: !GetAtt ForecastCronFunction.Arn
+
+  HistoryApiUrl:
+    Description: API Gateway URL for /api/history
+    Value: !Sub "https://${HistoryApi}.execute-api.${AWS::Region}.amazonaws.com/api/history"
+
+  DashboardUrl:
+    Description: S3 static website URL (HTTP — for dashboard)
+    Value: !Sub "http://${DashboardBucket}.s3-website-${AWS::Region}.amazonaws.com"
+
+  DashboardBucketName:
+    Description: S3 bucket name for static site uploads
+    Value: !Ref DashboardBucket
+
+  StateTableName:
+    Description: DynamoDB table holding the pipeline state
+    Value: !Ref StateTable

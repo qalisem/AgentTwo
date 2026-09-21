@@ -1,0 +1,32 @@
+# Environment
+.env
+.env.local
+.env*.local
+
+# Data (local persistence files, not committed)
+data/
+
+# Node
+node_modules/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Reference materials (PDFs / docx from supervisor — kept local only)
+docs/*
+!docs/README.md
+
+# Claude Code config (per-machine, may contain cached secrets)
+.claude/
+
+# AWS / SAM build artifacts (per-deploy, not committed)
+dist/
+.aws-sam/
+samconfig.toml
+
+# Dashboard config written by `npm run deploy:dashboard` (contains live API URL)
+dashboard/config.js
