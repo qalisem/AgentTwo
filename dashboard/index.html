@@ -104,7 +104,10 @@ const n = v => (v === "" || v == null) ? null : Number(v);
 const pct = v => v==null ? "—" : (v>=0?"+":"")+Number(v).toFixed(2)+"%";
 const cls = v => v==null ? "" : v>0 ? "pos" : v<0 ? "neg" : "zero";
 
-fetch(API_URL).then(r=>r.json()).then(d => {
+fetch(API_URL).then(r=>{
+  if(!r.ok) throw new Error(`API returned HTTP ${r.status} from ${API_URL} — the backend is unreachable or misconfigured, so there is no data to show.`);
+  return r.json();
+}).then(d => {
   const rows=d.rows||[], last=d.last, analysis=d.analysis||[], adaptive=d.adaptive||{history:[]}, accuracy=d.accuracy||[];
   const latest = rows[rows.length-1] || {};
   const histDays = adaptive.history ? adaptive.history.length : 0;
